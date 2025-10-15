@@ -4,7 +4,7 @@ library(writexl)
 library(jsonlite)
 library(rjson)
 library(dplyr)
-library(httr) #Pulling Data from Firebase
+library(httr) 
 library(anytime)
 library(RPostgres)
 library(data.table)
@@ -16,12 +16,21 @@ setwd("C:/Users/ACER/OneDrive - Jan Swasthya Technologies Private Limited/Docume
 
 shiprkt_sep_oct <- read.csv("shiprocket_sep-oct 2025.csv")
 shiprkt_sep_oct_status <- read.csv("shiprocket_sep-oct 2025_order.csv")
-shiprkt_sep_oct$Order.Number <- as.character(shiprkt_sep_oct$Order.Number)
 
 shiprocket <- shiprkt_sep_oct[, c("Date..Time" , "Order.Number", "AWB.Number", "Courier.Name", "Payment.Mode" , "Charged.Weight", "Zone")]
 Charges <- read.csv("charge sheet.csv")
 Additional_weight_charges <- read.csv("Additional weight charges.csv")
 names(Charges)[names(Charges) == "Courier..0me"] <- "Courier.Name"
+
+shiprocket <- merge(
+  shiprocket,
+  shiprkt_sep_oct_status [, c("Order.ID", "Product.Price")],
+  by.x = "Order.Number",
+  by.y = "Order.ID",
+  all.x = TRUE
+)
+rm(shiprkt_sep_oct_status)
+
 
 
 Charges$Forward <- gsub("^\\?", "", Charges$Forward)
@@ -32,8 +41,7 @@ Additional_weight_charges$Forward <- gsub("^\\?", "", Additional_weight_charges$
 Additional_weight_charges$COD.charge <- gsub("^\\?", "", Additional_weight_charges$COD.charge)
 Additional_weight_charges$COD.perc <- gsub("[\\?%]", "", Additional_weight_charges$COD.perc)
 
-Charges$Weight <- c("0.50")
-Additional_weight_charges$Weight <- c("0.50")
+
 Charges$Courier.Name[Charges$Courier.Name == "Pikndel Ndd"] <- "Pikndel NDD"
 Additional_weight_charges$Courier.Name[Additional_weight_charges$Courier.Name == "Pikndel Ndd"] <- "Pikndel NDD"
 shiprocket$Courier.Name[shiprocket$Courier.Name == "Amazon COD Surface 500gm"] <- "Amazon Surface 500gm"
@@ -49,17 +57,7 @@ shiprocket$Courier.Name[shiprocket$Courier.Name == "Shadowfax Reverse Surface"] 
 shiprocket$Courier.Name[shiprocket$Courier.Name == "Xpressbees Reverse Surface"] <- "Xpressbees Surface"
 shiprocket$Courier.Name[shiprocket$Courier.Name == "Xpressbees Surface_Stressed"] <- "Xpressbees Surface"
 
-shiprocket <- merge(
-  shiprocket,
-  shiprkt_sep_oct_status [, c("Order.ID", "Product.Price")],
-  by.x = "Order.Number",
-  by.y = "Order.ID",
-  all.x = TRUE
-)
-
-
-
-
+shiprocket <- shiprocket[!is.na(shiprocket$Charged.Weight), ]
 
 # Standardize weights (convert to grams)
 shiprocket <- shiprocket %>%
@@ -70,16 +68,31 @@ shiprocket <- shiprocket %>%
 shiprocket_500 <- shiprocket[shiprocket$Weight_g <= 500, ]
 shiprocket_more <- shiprocket[shiprocket$Weight_g > 500,]
 
-shiprocket_500 <- merge(shiprocket_500, Charges [, c("Courier.Name", "Zone", "Forward")], 
+
+
+
+#working on shiprocket_500
+
+shiprocket_500 <- merge(shiprocket_500, Charges [, c("Courier.Name", "Zone", "Forward", "COD.charge", "COD.perc")], 
                    by.x = c("Courier.Name", "Zone"),
                    by.y = c("Courier.Name", "Zone"),
                    all.x = TRUE)
-shiprocket_500 <- shiprocket_500[!is.na(shiprocket_500$Charged.Weight), ]
 unique(shiprocket_500$Courier.Name[is.na(shiprocket_500$Forward)])
 names(shiprocket_500)[names(shiprocket_500) == "Forward"] <- "Freight_charged"
 
+shiprocket_500 <- shiprocket_500 %>%
+  mutate(
+    COD.charge = as.numeric(COD.charge),
+    COD.perc   = as.numeric(COD.perc),
+    COD.charge = if_else(Payment.Mode == "Prepaid", NA_real_, COD.charge),
+    COD.perc   = if_else(Payment.Mode == "Prepaid", NA_real_, COD.perc),
+    COD.perc1 = (COD.perc/100) * Product.Price,
+    COD_charge = pmax(COD.perc1, COD.charge, na.rm = TRUE),
+    COD_charge = round(COD_charge, 2)
+  )
+
 shiprocket_500 <- merge(shiprocket_500,
-                         shiprkt_sep_oct [, c("Order.Number", "Freight.Forward.Amount")],
+                         shiprkt_sep_oct [, c("Order.Number", "Freight.Forward.Amount", "Freight.Cod.Charges" )],
                          by = "Order.Number",
                          all.x = TRUE)
 
@@ -111,7 +124,6 @@ shiprocket_more <- shiprocket_more %>%
 
 
 
-shiprocket_more <- shiprocket_more[!is.na(shiprocket_more$Charged.Weight), ]
 shiprocket_more$extra_units <- ifelse(
   shiprocket_more$Weight_g > 500,
   ceiling((shiprocket_more$Weight_g - 500) / 500),
@@ -119,17 +131,48 @@ shiprocket_more$extra_units <- ifelse(
 )
 
 
-shiprocket_more <- merge(shiprocket_more, Additional_weight_charges [, c("Courier.Name", "Zone", "Forward")], 
+shiprocket_more <- merge(shiprocket_more, Additional_weight_charges [, c("Courier.Name", "Zone", "Forward", "COD.charge", "COD.perc")], 
                         by.x = c("Courier.Name", "Zone"),
                         by.y = c("Courier.Name", "Zone"),
                         all.x = TRUE)
 unique(shiprocket_more$Courier.Name[is.na(shiprocket_more$Forward)])
 
+#adding value from charges list for "amazon surface 500gm"
+shiprocket_more <- shiprocket_more %>%
+  left_join(
+    Charges %>% 
+      filter(Courier.Name == "Amazon Surface 500gm") %>% 
+      select(Courier.Name, Zone, Forward, "COD.charge", "COD.perc"),
+    by = c("Courier.Name", "Zone")
+  ) 
+
+shiprocket_more <- shiprocket_more %>%
+  mutate(
+    Forward = if_else(!is.na(Forward.y), Forward.y, Forward.x),  # replace only matched rows
+    COD.charge = if_else(!is.na(COD.charge.y), COD.charge.y, COD.charge.x),
+    COD.perc = if_else(!is.na(COD.perc.y), COD.perc.y, COD.perc.x)
+  ) %>%
+  select(-Forward.x, -Forward.y, -COD.charge.y, -COD.charge.x, -COD.perc.x, -COD.perc.y)
+
+
 
 names(shiprocket_more)[names(shiprocket_more) == "Forward"] <- "Additional_charge"
 
+shiprocket_more <- shiprocket_more %>%
+  mutate(
+    COD.charge = as.numeric(COD.charge),
+    COD.perc   = as.numeric(COD.perc),
+    COD.charge = if_else(Payment.Mode == "Prepaid", NA_real_, COD.charge),
+    COD.perc   = if_else(Payment.Mode == "Prepaid", NA_real_, COD.perc),
+    COD.perc1 = (COD.perc/100) * Product.Price,
+    COD_charge = pmax(COD.perc1, COD.charge, na.rm = TRUE),
+    COD_charge = round(COD_charge, 2)
+  )
+
+
+
 shiprocket_more <- merge(shiprocket_more,
-      shiprkt_sep_oct [, c("Order.Number", "Freight.Forward.Amount")],
+      shiprkt_sep_oct [, c("Order.Number", "Freight.Forward.Amount", "Freight.Cod.Charges")],
       by = "Order.Number",
       all.x = TRUE)
 
@@ -138,8 +181,7 @@ shiprocket_more <- merge(shiprocket_more, Charges [, c("Courier.Name", "Zone", "
                         by.x = c("Courier.Name", "Zone"),
                         by.y = c("Courier.Name", "Zone"),
                         all.x = TRUE)
-shiprocket_more$Additional_charge[shiprocket_more$Courier.Name == "Amazon Surface 500gm"] <- 
-  shiprocket_more$Forward[shiprocket_more$Courier.Name == "Amazon Surface 500gm"]
+
 shiprocket_more <- shiprocket_more %>% 
   mutate(Additional_charge = as.numeric(gsub("[^0-9\\.]", "", Additional_charge)),
          extra_units = as.numeric(extra_units),
@@ -147,15 +189,28 @@ shiprocket_more <- shiprocket_more %>%
          Freight_charged =  Forward + (Additional_charge * extra_units))
 names(shiprocket_more)[names(shiprocket_more) == "Forward"] <- "Base_charge"
 
-Freight <- shiprocket_more[, c("Courier.Name", "Zone", "Order.Number", "Date..Time","Payment.Mode","AWB.Number", "Charged.Weight","Product.Price","Weight_g","Freight_charged", "Freight.Forward.Amount" )]
+Freight <- shiprocket_more[, c("Courier.Name", "Zone", "Order.Number", "Date..Time","Payment.Mode","AWB.Number", "Charged.Weight","Product.Price","Weight_g","Freight_charged", "COD_charge", "Freight.Forward.Amount", "Freight.Cod.Charges" )]
 
 Freight -> 
   backup
-Freight <- rbind (Freight, shiprocket_500)
+
+
+Freight <- rbind(
+  Freight,
+  shiprocket_500[, !(names(shiprocket_500) %in% c("COD.charge", "COD.perc", "COD.perc1"))]
+)
+
+Freight$COD_charge[is.na(Freight$COD_charge)] <- 0
+
 
 Freight <- Freight %>%
   mutate(
     Freight.Forward.Amount = as.numeric(gsub("[^0-9\\.]", "", Freight.Forward.Amount)),
     Freight_charged = as.numeric(gsub("[^0-9\\.]", "", Freight_charged)),
-    difference = Freight.Forward.Amount - Freight_charged
+    COD_charge = as.numeric(gsub("[^0-9\\.]", "",COD_charge)),
+    Freight.Cod.Charges = as.numeric(gsub("[^0-9\\.]", "",Freight.Cod.Charges)),
+    Total_freight_cal = Freight_charged + COD_charge,
+    Total_freight_SR = Freight.Forward.Amount + Freight.Cod.Charges,
+    difference = Total_freight_SR - Total_freight_cal,
+    diff_COD = Freight.Cod.Charges - COD_charge
   )
