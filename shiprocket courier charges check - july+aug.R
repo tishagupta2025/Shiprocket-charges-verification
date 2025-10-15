@@ -5,15 +5,19 @@ install.packages("tidyr")
 install.packages("stringr")
 install.packages("ggplot2")
 install.packages("purrr")
+library(readxl)
+library(dplyr)
+library(readr)
+library(tidyr)
+library(stringr)
+
+
 
 
 setwd("C:/Users/ACER/OneDrive - Jan Swasthya Technologies Private Limited/Documents/Shiprocket charges validation analysis - aug 2025")  
 
-library(readxl)
 shiprocket <- read_excel("shiprocket_july-aug 2025.csv")
-View(shiprocket)
 
-summary(shiprocket)
 sum(shiprocket$`Charged Weight` == "NA", na.rm = TRUE)
 sum(shiprocket$`Charged Dimensions` == "0", na.rm = TRUE) 
 
@@ -26,7 +30,6 @@ shiprocket$date <- format(shiprocket$datetime, "%d")
 
 ################## Calculate 'Total charges'################################# #######################################
 
-library(dplyr)
 
 shiprocket$Total_charge_cal <- rowSums(
   shiprocket[, c("Freight Total Amount", "On Hold Total Amount", "Other Adjustments")],
@@ -36,7 +39,6 @@ shiprocket$Total_charge_cal <- rowSums(
 ################## Extract dimensions recorded by sayacare employee from orders list on the basis of awb################################# ################################
 #reason: replace NA values in charged weight list
 
-library(readr)
 
 new_active_orders <- read_csv("orders list/new_active_orders.csv")
 past_orders <- read_csv("orders list/past_orders.csv")
@@ -55,8 +57,6 @@ shiprocket <- shiprocket %>%
 
 ################## Extract weight from SayaCare recorded Dimension################################# ##################################
 
-library(dplyr)
-library(tidyr)
 
 shiprocket <- shiprocket %>%
   separate(`dimensions`, 
@@ -74,11 +74,9 @@ shiprocket$`SC Applied Weight` <- round(shiprocket$`SC Applied Weight`, 2)
 
 ################## Create list 'july_aug_costdiff' from original courier dataset################################# ###########################################
 
-library(dplyr)
 july_aug_costdiff <- shiprocket %>% select(month_num, date, `AWB Number`, `Courier Name`, `Payment Mode`, `Applied Weight`, `Charged Weight`, Zone, Total_charge_cal, `SC Applied Weight` )
 
 ################## Create list 'Charges list' having required dataset for the plot#################################  ##############################
-library(dplyr)
 
 charges_list <- july_aug_costdiff %>%
   group_by(`AWB Number`, month_num, date, `Courier Name`, Zone, `Charged Weight`, `Payment Mode`, `Applied Weight`) %>%
@@ -87,7 +85,6 @@ charges_list <- july_aug_costdiff %>%
             .groups = "drop")
 
 ################## Replacing NA in 'charged weight' with 'Applied weight' values on the basis of AWB number################################# ############################################
-library(dplyr)
 
 charges_list <- charges_list %>%
   mutate(`Charged Weight` == "NA",
@@ -117,8 +114,6 @@ charges_list <- charges_list %>%
 
 
 ################## Creating courier service provider categories################################################################## #########################################
-library(dplyr)
-library(stringr)
 
 charges_list <- charges_list %>%
   mutate(Courier_Group = case_when(
